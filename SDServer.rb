@@ -2,28 +2,7 @@ require 'gserver'
 require 'active_record'
 
 ActiveRecord::Base.establish_connection(:adapter=>"sqlite3",:database=>"test.sqlite3",:host=>"localhost",:username=>"leonid")
-=begin
-ActiveRecord::Schema.define do
-    #drop_table :fields
-    #drop_table :plants
-    #drop_table :users
 
-    create_table :fields do |table|
-        table.column :x, :integer
-        table.column :y, :integer
-        table.column :user_id, :integer
-        table.column :plant_id, :integer     
-    end
-
-    create_table :plants do |table|
-        table.column :plant_name, :string
-    end
-
-    create_table :users do |table|
-        table.column :username, :string
-    end
-end
-=end
 class Field < ActiveRecord::Base
   belongs_to :user
   belongs_to :plant
@@ -56,7 +35,7 @@ class FarmServer < GServer
     else
       @@xmldata="<?xml version=\"1.0\"?>\n\<cross-domain-policy>\n\<allow-access-from domain=\"*\" to-ports=\"*\" />\n\</cross-domain-policy>"
     end
-    #$/="\0"
+    $/="\0"
     @messages=[]
     @clients=Hash::new
     @caller=Array::new
@@ -67,16 +46,17 @@ class FarmServer < GServer
     @clients[io]=Array::new
     count=0
     loop do
-      if IO.select([io],nil,nil,2)   
+      if IO.select([io],nil,nil,nil)   
           line=io.gets
           if line =~ /policy-file-request/
+            
             @@xmldata+="\0"
             io.puts(@@xmldata)
             skip
           end      
           if !(line.nil?)
             #puts count
-            @clients[io] << line.chomp
+            @clients[io] << line.chomp.lstrip
             #@messages << line#.chomp.lstrip
             count+=1
             #puts @clients[io].inspect
@@ -95,7 +75,7 @@ class FarmServer < GServer
             #io.puts("\0\nfield\0\ndata\0\x05<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<item type=\"0\" x=\"0\" y=\"0\" size=\"1\" />\0")
             #io.flush
             #io.puts("{EOP}")
-            #io.write(fieldstring(io))  
+              
             dispatchqueue(io)
           end
 
@@ -103,16 +83,40 @@ class FarmServer < GServer
     end
   end
   def eop(*args)
+    puts "ARGS: "+args.inspect
+    str=fieldstring(args[0])
+    puts(str)
+    args[0].puts(str)
     #Dummy
   end
-  def method_missing(method, arg)
+  def method_missing(method, *args)
     puts "Called: #{method}"
   end
-  def newday_handler(io)
+  def addvegy_handler(*args)
+    hash=args[1]
+    if Field.where(:x=>hash["x"],:y=>hash["y"]).first.nil?
+      hash["plant_id"]= Plant.where("plant_name"=>hash["type"]).first.nil?? Plant.first.id : Plant.where("plant_name"=>hash["type"]).first.id
+      hash["stage"]=1
+      hash.delete("type")     
+      User.find(:first).fields.create(hash)
+    end
+  end
+  def connection_handler(*args)
+            
+  end
+  def harvesting_handler(*args)
+    hash=args[1]
+    Field.where(hash).first.nil?? false : Field.where(hash).first.delete    
+  end  
+  def newday_handler(*args)
     puts "newday_handler"
     Field.find(:all).each do |rec|
-      rec.stage+=1 if rec.stage<5
-      rec.save
+      if rec.stage.nil?
+        rec.delete
+      else      
+        rec.stage+=1 if rec.stage<5
+        rec.save
+      end
     end  
   end
   def dispatchqueue(io)
@@ -125,22 +129,35 @@ class FarmServer < GServer
        @caller.shift
     end
     @clients[io].each do |mes|
+      
       if @caller.length>0
         puts (@handlers[@caller[0]].length*2-1).to_s+" == "+@caller.length.to_s
       end
-      
-      if (@caller.length>0) and (!@handlers[mes].nil? or (@handlers[@caller[0]].length*2-1)==(@caller.length))
+      if (@caller.length>0) and ((@handlers[@caller[0]].length*2-1)==(@caller.length) or !@handlers[mes].nil?)
         puts "caller="+@caller.inspect
         puts "calling "+@caller[0].to_s
-        send(@caller[0],io)
-        @caller=[]
+        parametershash={}
+        @handlers[@caller[0]].each do |h|
+            ind=@caller[1..@caller.length-1].index(h)
+            puts h
+            puts ind
+            if !ind.nil?
+              parametershash[h]=@caller[1..@caller.length-1][ind+1]
+            end
+        end
+        puts parametershash.inspect
+        send(@handlers[@caller[0]][0],io,parametershash)
+        @caller=[]  
       else
         puts "caller="+@caller.inspect
       end
       if @clients[io].length>0
         @caller << @clients[io].shift
       end
-    end        
+    end  
+    if @clients[io].length>0 and @caller.length>0
+      dispatchqueue(io)      
+    end      
   end
   def fieldstring(io)
     str=""
