@@ -48,7 +48,6 @@ class FarmServer < GServer
       @@xmldata="<?xml version=\"1.0\"?>\n\<cross-domain-policy>\n\<allow-access-from domain=\"*\" to-ports=\"*\" />\n\</cross-domain-policy>"
 
     end
-     @@configdata="<?xml version=\"1.0\"?>\n\<config>\n</config>"
     $/="\0"
     @messages=[]
     @clients=Hash::new
@@ -77,13 +76,8 @@ class FarmServer < GServer
             @@xmldata+="\0"
             io.puts(@@xmldata)
             io.close
-            skip
+            next
           end   
-          if line =~ /config-file-request/
-            @@configdata+="\0"
-            io.puts(@@configdata)
-            skip
-          end    
           if !(line.nil?)
             count+=1
             if line.length>255
