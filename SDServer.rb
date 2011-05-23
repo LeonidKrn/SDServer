@@ -301,7 +301,6 @@ end
 
 
 server=FarmServer.new(5566)
-server.audit=true
 server.start
 server.join
 
