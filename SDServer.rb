@@ -1,5 +1,6 @@
 require 'gserver'
 require 'active_record'
+require 'rexml/document'
 
 ActiveRecord::Base.establish_connection(:adapter=>"sqlite3",:database=>"test.sqlite3",:host=>"localhost",:username=>"leonid")
 
@@ -14,6 +15,17 @@ end
 
 class Plant < ActiveRecord::Base
     has_many :fields
+end
+
+class String
+  def push_string(a)
+    if a.is_a?(String)
+      lenchar=""
+      lenchar=a.length>255?((a.length/256).chr+(a.length-256).chr) : (0.chr+a.length.chr)
+      concat lenchar
+      concat a  
+    end
+  end
 end
 
 def to_byte_array(num)
@@ -39,48 +51,57 @@ class FarmServer < GServer
     @messages=[]
     @clients=Hash::new
     @caller=Array::new
-    @handlers={"connection"=>["connection_handler","user_alias"],"addvegy"=>["addvegy_handler","x","y","type"],"harvesting"=>["harvesting_handler","x","y"],"newday"=>["newday_handler"],"eop"=>["eop"]}
+    @users=Hash::new
+    #@handlers={"connection"=>["connection_handler","user_alias"],"addvegy"=>["addvegy_handler","x","y","type"],"harvesting"=>["harvesting_handler","x","y"],"newday"=>["newday_handler"],"eop"=>["eop"]}
+    @handlers={"connection"=>["connection_handler","user_alias"],"field"=>["addvegy_handler","data"],"harvesting"=>["harvesting_handler","x","y"],"newday"=>["newday_handler"],"eop"=>["eop"]}
     
   end
   def serve(io)
     @clients[io]=Array::new
     count=0
+
     loop do
-      if IO.select([io],nil,nil,nil)   
+      if IO.select([io],nil,nil,2)   
           line=io.gets
           if line =~ /policy-file-request/
-            
             @@xmldata+="\0"
             io.puts(@@xmldata)
             skip
-          end      
+          end    
           if !(line.nil?)
-            #puts count
-            @clients[io] << line.chomp.lstrip
-            #@messages << line#.chomp.lstrip
-            count+=1
-            #puts @clients[io].inspect
-            puts @clients.inspect
-            #puts("\0\nfield\0\ndata\0\x05<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<item type=\"0\" x=\"0\" y=\"0\" size=\"1\" />\0")
-            #io.write(0x05)
-            #"field\n".each_byte{|c| io.write(to_byte_array(c))}
-            #io.puts("hello\0")
-            #io.flush
-            #"field\ndata\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<field><item type=\"0\" x=\"0\" y=\"0\" size=\"1\" />\n</field>\0".each_byte{|c| io.write('\\'+c.to_s)}
-      
-            # io.write("field")  
-            # io.write("data")  
-            # io.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<field><item type=\"0\" x=\"0\" y=\"0\" size=\"1\" />\n</field>\0")  
-            # io.write("\n{EOP}\0")
-            #io.puts("\0\nfield\0\ndata\0\x05<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<item type=\"0\" x=\"0\" y=\"0\" size=\"1\" />\0")
-            #io.flush
-            #io.puts("{EOP}")
+            puts line
+            if line.length>255
               
+            end
+            @clients[io] << line.chomp[1..-1]
+            count+=1
+            puts @clients.inspect
+            puts @users.inspect
             dispatchqueue(io)
-          end
-
+           end
       end
     end
+
+  end
+  def push_field(io)
+    string=""
+            string.push_string("field\0")
+            string.push_string("data")
+            quer=""
+            quer=quer+"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n"
+            quer=quer+"<field>\n<item x=\"6\" y=\"7\" type=\"2\" size=\"2\"/>\n"
+            quer=quer+"<item type=\"0\" x=\"0\" y=\"0\" size=\"1\"/>\n"
+            quer=quer+"<item x=\"3\" y=\"1\" type=\"0\" size=\"2\"/>\n"
+            quer=quer+"<item x=\"3\" y=\"3\" type=\"0\" size=\"2\"/>\n"
+            quer=quer+"<item x=\"3\" y=\"4\" type=\"0\" size=\"2\"/>\n"
+            quer=quer+"<item x=\"5\" y=\"3\" type=\"2\" size=\"2\"/>\n"
+            quer=quer+"<item x=\"5\" y=\"4\" type=\"2\" size=\"2\"/>\n"
+            quer=quer+"<item x=\"6\" y=\"9\" type=\"2\" size=\"2\"/>\n"
+            quer=quer+("</field>\n")
+            string.push_string(quer)
+            string.push_string("{EOP}\0")
+            io.write(string)#io.write("\000\005{EOF}")
+            io.flush()
   end
   def eop(*args)
     puts "ARGS: "+args.inspect
@@ -93,16 +114,42 @@ class FarmServer < GServer
     puts "Called: #{method}"
   end
   def addvegy_handler(*args)
+
     hash=args[1]
+    doc = REXML::Document.new(hash["data"])
+    doc.elements.each('field/item') do |ele|
+      inhash={}
+      inhash[:x]=ele.attributes["x"]
+      inhash[:y]=ele.attributes["y"]
+      inhash[:stage]=ele.attributes["size"]
+      inhash[:plant_id]=(ele.attributes["type"].succ)
+      puts inhash.inspect
+      if User.where(:username=>@users[args[0]]).first.fields.where(:x=>inhash[:x],:y=> inhash[:y]).first.nil? 
+        field=User.where(:username=>@users[args[0]]).first.fields.new
+        field.x=inhash[:x]
+        field.y=inhash[:y]
+        field.stage=inhash[:stage]
+        field.plant_id=inhash[:plant_id]
+        field.save
+        User.where(:username=>@users[args[0]]).first.fields.create(inhash)
+      end
+    end
+
+
+
+=begin
     if Field.where(:x=>hash["x"],:y=>hash["y"]).first.nil?
       hash["plant_id"]= Plant.where("plant_name"=>hash["type"]).first.nil?? Plant.first.id : Plant.where("plant_name"=>hash["type"]).first.id
       hash["stage"]=1
       hash.delete("type")     
       User.find(:first).fields.create(hash)
     end
+=end
+    push_field(args[0]) 
   end
   def connection_handler(*args)
-            
+    @users[args[0]]=args[1]["user_alias"]  
+    push_field(args[0])       
   end
   def harvesting_handler(*args)
     hash=args[1]
@@ -129,11 +176,13 @@ class FarmServer < GServer
        @caller.shift
     end
     @clients[io].each do |mes|
-      
+      if @clients[io].length>0
+        @caller << @clients[io].shift
+      end
       if @caller.length>0
         puts (@handlers[@caller[0]].length*2-1).to_s+" == "+@caller.length.to_s
       end
-      if (@caller.length>0) and ((@handlers[@caller[0]].length*2-1)==(@caller.length) or !@handlers[mes].nil?)
+      if (@caller.length>0) and ((@handlers[@caller[0]].length*2-1)==(@caller.length))# or !@handlers[mes].nil?)
         puts "caller="+@caller.inspect
         puts "calling "+@caller[0].to_s
         parametershash={}
@@ -151,9 +200,7 @@ class FarmServer < GServer
       else
         puts "caller="+@caller.inspect
       end
-      if @clients[io].length>0
-        @caller << @clients[io].shift
-      end
+
     end  
     if @clients[io].length>0 and @caller.length>0
       dispatchqueue(io)      
