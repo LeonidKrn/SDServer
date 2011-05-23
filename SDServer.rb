@@ -65,7 +65,7 @@ class FarmServer < GServer
   
   def serve(io) #Основной цикл для приёма сообщений от клиентов
     @ready_to_grow[io]=false
-    @threads[io]=Thread.new { loop { periodic_handler(io) if @ready_to_grow[io]; sleep 30 } }
+    @threads[io]=Thread.new { loop { periodic_handler(io) if @ready_to_grow[io]; sleep 10 } }
     @clients[io]=Array::new
     @caller[io]=Array::new
     count=0
@@ -302,6 +302,7 @@ end
 
 server=FarmServer.new(5566)
 server.start
+server.audit=true
 server.join
 
 #loop do 
