@@ -21,7 +21,7 @@ class String
   def push_string(a)
     if a.is_a?(String)
       lenchar=""
-      lenchar=a.length>255?((a.length/256).chr+(a.length-256).chr) : (0.chr+a.length.chr)
+      lenchar=a.length>255?((a.length/256).chr+(a.length-256*(a.length/256)).chr) : (0.chr+a.length.chr)
       concat lenchar
       concat a  
     end
@@ -67,6 +67,11 @@ class FarmServer < GServer
             @@xmldata+="\0"
             io.puts(@@xmldata)
             skip
+          end   
+          if line =~ /config-file-request/
+            #@@xmldata+="\0"
+            #io.puts(@@xmldata)
+            skip
           end    
           if !(line.nil?)
             puts line
@@ -84,24 +89,42 @@ class FarmServer < GServer
 
   end
   def push_field(io)
+    
+    doc = REXML::Document.new("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    doc.add_element("field")
+    User.where(:username=>"guest").first.fields.each do |f|
+      inhash={}
+      inhash["x"]=f.x.to_s
+      inhash["y"]=f.y.to_s
+      inhash["type"]=(f.plant_id-1).to_s
+      inhash["size"]=f.stage.to_s    
+      doc.root.add_element("item", inhash)    
+    end
     string=""
-            string.push_string("field\0")
-            string.push_string("data")
-            quer=""
-            quer=quer+"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n"
-            quer=quer+"<field>\n<item x=\"6\" y=\"7\" type=\"2\" size=\"2\"/>\n"
-            quer=quer+"<item type=\"0\" x=\"0\" y=\"0\" size=\"1\"/>\n"
-            quer=quer+"<item x=\"3\" y=\"1\" type=\"0\" size=\"2\"/>\n"
-            quer=quer+"<item x=\"3\" y=\"3\" type=\"0\" size=\"2\"/>\n"
-            quer=quer+"<item x=\"3\" y=\"4\" type=\"0\" size=\"2\"/>\n"
-            quer=quer+"<item x=\"5\" y=\"3\" type=\"2\" size=\"2\"/>\n"
-            quer=quer+"<item x=\"5\" y=\"4\" type=\"2\" size=\"2\"/>\n"
-            quer=quer+"<item x=\"6\" y=\"9\" type=\"2\" size=\"2\"/>\n"
-            quer=quer+("</field>\n")
+    string.push_string("field\0")
+    string.push_string("data\0")
+    quer=""
+
+            quer=doc.to_s.gsub(">",">\n")+"\0"
+            quer="<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<field>\n<item type=\"0\" x=\"4\" y=\"1\" size=\"0\" /> \n<item type=\"1\" x=\"5\" y=\"1\" size=\"0\" /> \n<item type=\"2\" x=\"6\" y=\"1\" size=\"0\" /> \n</field>\n"
             string.push_string(quer)
             string.push_string("{EOP}\0")
             io.write(string)#io.write("\000\005{EOF}")
             io.flush()
+
+=begin
+            quer=quer+"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n"
+            quer=quer+"<field>\n"
+            quer=quer+"<item x=\"5\" y=\"3\" type=\"2\" size=\"0\" />\n"
+            quer=quer+"<item x=\"3\" y=\"1\" type=\"0\" size=\"2\" />\n"
+            quer=quer+"<item x=\"3\" y=\"3\" type=\"0\" size=\"2\" />\n"
+            quer=quer+"<item x=\"3\" y=\"4\" type=\"0\" size=\"2\" />\n"
+            quer=quer+"<item x=\"5\" y=\"3\" type=\"2\" size=\"2\" />\n"
+            quer=quer+"<item x=\"5\" y=\"4\" type=\"2\" size=\"2\" />\n"
+            quer=quer+"<item x=\"6\" y=\"9\" type=\"2\" size=\"2\" />\n"
+            quer=quer+("</field>\n")
+=end
+
   end
   def eop(*args)
     puts "ARGS: "+args.inspect
@@ -119,10 +142,10 @@ class FarmServer < GServer
     doc = REXML::Document.new(hash["data"])
     doc.elements.each('field/item') do |ele|
       inhash={}
-      inhash[:x]=ele.attributes["x"]
-      inhash[:y]=ele.attributes["y"]
-      inhash[:stage]=ele.attributes["size"]
-      inhash[:plant_id]=(ele.attributes["type"].succ)
+      inhash[:x]=ele.attributes["x"].to_i
+      inhash[:y]=ele.attributes["y"].to_i
+      inhash[:stage]=ele.attributes["size"].to_i
+      inhash[:plant_id]=(ele.attributes["type"].succ).to_i
       puts inhash.inspect
       if User.where(:username=>@users[args[0]]).first.fields.where(:x=>inhash[:x],:y=> inhash[:y]).first.nil? 
         field=User.where(:username=>@users[args[0]]).first.fields.new
@@ -131,20 +154,11 @@ class FarmServer < GServer
         field.stage=inhash[:stage]
         field.plant_id=inhash[:plant_id]
         field.save
-        User.where(:username=>@users[args[0]]).first.fields.create(inhash)
+        #User.where(:username=>@users[args[0]]).first.fields.create(inhash)
       end
+     
     end
-
-
-
-=begin
-    if Field.where(:x=>hash["x"],:y=>hash["y"]).first.nil?
-      hash["plant_id"]= Plant.where("plant_name"=>hash["type"]).first.nil?? Plant.first.id : Plant.where("plant_name"=>hash["type"]).first.id
-      hash["stage"]=1
-      hash.delete("type")     
-      User.find(:first).fields.create(hash)
-    end
-=end
+    send(@handlers["newday"][0],io)
     push_field(args[0]) 
   end
   def connection_handler(*args)
@@ -157,7 +171,7 @@ class FarmServer < GServer
   end  
   def newday_handler(*args)
     puts "newday_handler"
-    Field.find(:all).each do |rec|
+    User.where(:username=>"guest").first.fields.find(:all).each do |rec|
       if rec.stage.nil?
         rec.delete
       else      
@@ -206,6 +220,7 @@ class FarmServer < GServer
       dispatchqueue(io)      
     end      
   end
+=begin
   def fieldstring(io)
     str=""
     str+="<country>\n<field zero_x=\"0\" zero_y=\"0\" size_x=\"70\" size_y=\"70\">\n"
@@ -218,7 +233,9 @@ class FarmServer < GServer
     str+="</field>\n</country>\0"
     return str.delete("<").delete(">")
   end
+=end
 end
+
 
 server=FarmServer.new(5566)
 server.audit=true
