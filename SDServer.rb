@@ -2,7 +2,7 @@ require 'gserver'
 require 'active_record'
 require 'rexml/document'
 
-ActiveRecord::Base.establish_connection(:adapter=>"sqlite3",:database=>"test.sqlite3",:host=>"localhost",:username=>"leonid")
+ActiveRecord::Base.establish_connection(:adapter=>"sqlite3",:database=>"farm.sqlite3",:host=>"localhost",:username=>"leonid")
 
 class Field < ActiveRecord::Base
   belongs_to :user
@@ -52,25 +52,31 @@ class FarmServer < GServer
     $/="\0"
     @messages=[]
     @clients=Hash::new
-    @caller=Array::new
+    @caller=Hash::new
     @users=Hash::new
     @buffer=Hash::new
     @tompo=[]
     @buffered=true
-    #@handlers={"connection"=>["connection_handler","user_alias"],"addvegy"=>["addvegy_handler","x","y","type"],"harvesting"=>["harvesting_handler","x","y"],"newday"=>["newday_handler"],"eop"=>["eop"]}
+    @ready_to_grow=Hash::new
+    @threads=Hash::new
     @handlers={"connection"=>["connection_handler","user_alias"],"field"=>["addvegy_handler","data"],"crop"=>["crop_handler","x","y","type"],"gather"=>["harvesting_handler","x","y"],"newday"=>["newday_handler"],"eop"=>["eop"]}
     
   end
-  def serve(io)
+  
+  def serve(io) #Основной цикл для приёма сообщений от клиентов
+    @ready_to_grow[io]=false
+    @threads[io]=Thread.new { loop { periodic_handler(io) if @ready_to_grow[io]; sleep 30 } }
     @clients[io]=Array::new
+    @caller[io]=Array::new
     count=0
 
     loop do
-      if IO.select([io],nil,nil,0.1)   
+      if IO.select([io],nil,nil,nil)   
           line=io.gets
           if line =~ /policy-file-request/
             @@xmldata+="\0"
             io.puts(@@xmldata)
+            io.close
             skip
           end   
           if line =~ /config-file-request/
@@ -79,28 +85,28 @@ class FarmServer < GServer
             skip
           end    
           if !(line.nil?)
-            #puts line
             count+=1
             if line.length>255
               
             end
-            #@tompo << line
             @clients[io].push(line.chomp[1..-1])
-            #count+=1
-            #puts @clients.inspect
-            #puts @tompo.inspect
+
             dispatchqueue(io)
-            if count>10
-              newday_handler(io)
-              push_field(io)
-              count=0
-            end
+
+            
            end
       end
     end
+ 
 
   end
-  def push_field(io)
+  def periodic_handler(io) #Периодический прирост растений
+    newday_handler(io)
+    push_field(io)   
+    buffertodb(io) 
+  end
+ 
+  def push_field(io) #Функция пересылки данных о поле клиенту
     
     doc = REXML::Document.new("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
     doc.add_element("field")
@@ -114,7 +120,7 @@ class FarmServer < GServer
         doc.root.add_element("item", inhash)     
       end
     else
-      User.where(:username=>"guest").first.fields.each do |f|
+      User.where(:username=>@users[io]).first.fields.each do |f|
         inhash={}
         inhash["x"]=f.x.to_s
         inhash["y"]=f.y.to_s
@@ -130,34 +136,34 @@ class FarmServer < GServer
     quer=doc.to_s.gsub(">",">\n")+"\0"
     string.push_string(quer)
     string.push_string("{EOP}\0")
-    io.write(string)#io.write("\000\005{EOF}")
+    io.write(string)
     io.flush()
   end
-  def eop(*args)
-    #puts "ARGS: "+args.inspect
+
+  def eop(*args) #Заглушка
     str=fieldstring(args[0])
-    #puts(str)
     args[0].puts(str)
     #Dummy
   end
+
   def method_missing(method, *args)
     #puts "Called: #{method}"
   end
-  def crop_handler(*args)
+
+  def crop_handler(*args) #Обработка команды посадки растения
     
     hash=args[1]
-    puts args.inspect
+    #puts args.inspect
     hash["x"]=hash["x"].to_i
     hash["y"]=hash["y"].to_i
     hash["type"]=hash["type"].to_i
     if @buffer[args[0]][{:x=>hash["x"], :y=>hash["y"]}].nil?
        @buffer[args[0]][{:x=>hash["x"], :y=>hash["y"]}]={:size=>0,:type=>hash["type"]}
     end
-    puts "buffer, handling "+ @buffer[args[0]].inspect
-   puts "buffer, handling "+ @buffer[args[0]].length.to_s
+    buffertodb(args[0])
   end
-  def addvegy_handler(*args)
 
+  def addvegy_handler(*args) #Обработка команды посадки растения в xml формате, пока не используется
     hash=args[1]
     doc = REXML::Document.new(hash["data"])
     doc.elements.each('field/item') do |ele|
@@ -166,7 +172,6 @@ class FarmServer < GServer
       inhash[:y]=ele.attributes["y"].to_i
       inhash[:stage]=ele.attributes["size"].to_i
       inhash[:plant_id]=(ele.attributes["type"].succ).to_i
-      #puts inhash.inspect
       if User.where(:username=>@users[args[0]]).first.fields.where(:x=>inhash[:x],:y=> inhash[:y]).first.nil? 
         field=User.where(:username=>@users[args[0]]).first.fields.new
         field.x=inhash[:x]
@@ -174,42 +179,55 @@ class FarmServer < GServer
         field.stage=inhash[:stage]
         field.plant_id=inhash[:plant_id]
         field.save
-        #User.where(:username=>@users[args[0]]).first.fields.create(inhash)
       end
-     
     end
     send(@handlers["newday"][0],io)
     push_field(args[0]) 
   end
-  def dbtobuffer(io)
+
+  def dbtobuffer(io) #Выгрузка базы данных в буферный хэш
     @buffer[io]=Hash::new
-    User.where(:username=>"guest").first.fields.each do |f|
+    User.where(:username=>@users[io]).first.fields.each do |f|
       @buffer[io][{:x=>f.x,:y=>f.y}]={:size=>f.stage,:type=>(f.plant_id-1)}
     end  
   end
-  def buffertodb(io)
+
+  def buffertodb(io) #Выгрузка буфера в БД
     @buffer[io].each_pair do |xy,stagetype|
-      field=User.where(:username=>"guest").first.fields
+      field=User.where(:username=>@users[io]).first.fields
       if field.where(xy).first.nil?
         field.create(xy.merge({:stage=>stagetype[:size],:plant_id=>(stagetype[:type]+1)}))    
       else
         field.where(xy).first.update_attributes(:stage=>stagetype[:size],:plant_id=>(stagetype[:type]+1))
       end
     end
-    User.where(:username=>"guest").first.fields.each do |f|
+    User.where(:username=>@users[io]).first.fields.each do |f|
       if @buffer[io][{:x=>f.x,:y=>f.y}].nil?
         f.delete
       end
     end
-   
   end
-  def connection_handler(*args)
+
+  def connection_handler(*args) #Обработчик команды соединения с сервером
+    @users.each_pair do |io,user|
+      if user==args[1]["user_alias"] and !io.closed?
+        io.close
+      end
+      
+    end
+     
     @users[args[0]]=args[1]["user_alias"]  
+    if User.where(:username=>@users[args[0]]).nil?
+      User.create(:username=>@users[args[0]])
+    end
     @buffer[args[0]]=Hash::new
     dbtobuffer(args[0]) if @buffered 
-    push_field(args[0])       
+    push_field(args[0])    
+    @ready_to_grow[args[0]]=true  
+
   end
-  def harvesting_handler(*args)
+
+  def harvesting_handler(*args) #Обработчик команды сбора урожая 
     hash=args[1]
     hash["x"]=hash["x"].to_i
     hash["y"]=hash["y"].to_i
@@ -218,13 +236,11 @@ class FarmServer < GServer
         @buffer[args[0]].delete({:x=>hash["x"], :y=>hash["y"]})
       end
     end
-    puts hash.inspect
-     puts "buffer, handling "+ @buffer[args[0]].inspect
+    buffertodb(args[0])
   end  
 
 
-  def newday_handler(*args)
-    #puts "newday_handler"
+  def newday_handler(*args) #Обработчик команды следующего хода
     if @buffered
       @buffer[args[0]].each_value do |v|
         if v[:size]<4
@@ -232,7 +248,7 @@ class FarmServer < GServer
         end
       end
     else    
-      User.where(:username=>"guest").first.fields.find(:all).each do |rec|
+      User.where(:username=>@users[args[0]]).first.fields.find(:all).each do |rec|
         if rec.stage.nil?
           rec.delete
         else      
@@ -242,69 +258,54 @@ class FarmServer < GServer
       end  
     end
   end
-  def dispatchqueue(io)
-    #puts "caller1="+@caller.inspect
-    while @handlers[@clients[io][0]].nil? and @clients[io].length>0 and @caller.length==0 do
-      puts "arp"
-      @clients[io].shift   
+
+  def dispatchqueue(io) #Разборщик очереди команд от клиента
+
+    #Вырезка мусора из очереди команд клиента
+    while @handlers[@clients[io][0]].nil? and @clients[io].length>0 and @caller[io].length==0 do
+      @clients[io].shift  
     end
-    while @caller.length>0 and @handlers[@caller[0]].nil? 
-       @caller.shift
+    
+    #Вырезка мусора из последовательности вызова функций
+    while @caller[io].length>0 and @handlers[@caller[io][0]].nil? 
+       @caller[io].shift
     end
+    
     @clients[io].each do |mes|
       if @clients[io].length>0
-        @caller << @clients[io].shift
+        @caller[io] << @clients[io].shift
       end
-      if @caller.length>0
-        #puts (@handlers[@caller[0]].length*2-1).to_s+" == "+@caller.length.to_s
+      if @caller[io].length>0
       end
-      if (@caller.length>0) and ((@handlers[@caller[0]].length*2-1)<=(@caller.length))# or !@handlers[mes].nil?)
-        #puts "caller="+@caller.inspect
-        #puts "calling "+@caller[0].to_s
+      #Поиск в хэше обработчиков команды с полученным названием и сверка с набором параметров
+      if (@caller[io].length>0) and ((@handlers[@caller[io][0]].length*2-1)<=(@caller[io].length))# or !@handlers[mes].nil?)
         parametershash={}
-        @handlers[@caller[0]].each do |h|
-            ind=@caller[1..@caller.length-1].index(h)
-            #puts h
-            #puts ind
+        @handlers[@caller[io][0]].each do |h|
+            ind=@caller[io][1..@caller[io].length-1].index(h)
             if !ind.nil?
-              parametershash[h]=@caller[1..@caller.length-1][ind+1]
+              #Создание хэша параметров для вызываемой функции
+              parametershash[h]=@caller[io][1..@caller[io].length-1][ind+1]
             end
         end
-        #puts parametershash.inspect
-        send(@handlers[@caller[0]][0],io,parametershash)
-        @caller=[]  
-      else
-        #puts "caller="+@caller.inspect
+        #Вызов обработчика
+        send(@handlers[@caller[io][0]][0],io,parametershash)
+        @caller[io]=[]  
       end
-
     end  
-    if @clients[io].length>0 and @caller.length>0
+    if @clients[io].length>0 and @caller[io].length>0
       dispatchqueue(io)      
     end      
   end
-=begin
-  def fieldstring(io)
-    str=""
-    str+="<country>\n<field zero_x=\"0\" zero_y=\"0\" size_x=\"70\" size_y=\"70\">\n"
-    Field.find(:all).each do |rec|
-      str+="<"
-      str+=rec.plant.plant_name
-      str+=" id=\""+rec.plant.id.to_s+"\" "
-      str+="x=\"#{rec.x}\" y=\"#{rec.y}\" stage=\"#{rec.stage}\">\n"
-    end
-    str+="</field>\n</country>\0"
-    return str.delete("<").delete(">")
-  end
-=end
+
 end
 
 
 server=FarmServer.new(5566)
 server.audit=true
-#puts server.fieldstring nil
 server.start
+server.join
 
-loop do 
-  
-  break if server.stopped?
-end
+#loop do 
+#  break if server.stopped?
+#end
+
