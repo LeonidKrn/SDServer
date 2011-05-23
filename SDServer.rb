@@ -56,6 +56,7 @@ class FarmServer < GServer
     @users=Hash::new
     @buffer=Hash::new
     @tompo=[]
+    @buffered=true
     #@handlers={"connection"=>["connection_handler","user_alias"],"addvegy"=>["addvegy_handler","x","y","type"],"harvesting"=>["harvesting_handler","x","y"],"newday"=>["newday_handler"],"eop"=>["eop"]}
     @handlers={"connection"=>["connection_handler","user_alias"],"field"=>["addvegy_handler","data"],"crop"=>["crop_handler","x","y","type"],"gather"=>["harvesting_handler","x","y"],"newday"=>["newday_handler"],"eop"=>["eop"]}
     
@@ -79,6 +80,7 @@ class FarmServer < GServer
           end    
           if !(line.nil?)
             #puts line
+            count+=1
             if line.length>255
               
             end
@@ -88,6 +90,11 @@ class FarmServer < GServer
             #puts @clients.inspect
             #puts @tompo.inspect
             dispatchqueue(io)
+            if count>10
+              newday_handler(io)
+              push_field(io)
+              count=0
+            end
            end
       end
     end
@@ -97,39 +104,34 @@ class FarmServer < GServer
     
     doc = REXML::Document.new("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
     doc.add_element("field")
-    User.where(:username=>"guest").first.fields.each do |f|
-      inhash={}
-      inhash["x"]=f.x.to_s
-      inhash["y"]=f.y.to_s
-      inhash["type"]=(f.plant_id-1).to_s
-      inhash["size"]=f.stage.to_s    
-      doc.root.add_element("item", inhash)    
+    if @buffered
+      @buffer[io].each_pair do |xy,sizetype| 
+        inhash={}
+        inhash["x"]=xy[:x].to_s
+        inhash["y"]=xy[:y].to_s
+        inhash["type"]=sizetype[:type].to_s
+        inhash["size"]=sizetype[:size].to_s    
+        doc.root.add_element("item", inhash)     
+      end
+    else
+      User.where(:username=>"guest").first.fields.each do |f|
+        inhash={}
+        inhash["x"]=f.x.to_s
+        inhash["y"]=f.y.to_s
+        inhash["type"]=(f.plant_id-1).to_s
+        inhash["size"]=f.stage.to_s    
+        doc.root.add_element("item", inhash)    
+      end
     end
     string=""
     string.push_string("field\0")
     string.push_string("data\0")
     quer=""
-
-            quer=doc.to_s.gsub(">",">\n")+"\0"
-            #quer="<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<field>\n<item type=\"1\" x=\"4\" y=\"1\" size=\"2\" /> \n<item type=\"1\" x=\"5\" y=\"1\" size=\"2\" /> \n<item type=\"1\" x=\"6\" y=\"1\" size=\"2\" /> \n</field>\n"
-            string.push_string(quer)
-            string.push_string("{EOP}\0")
-            io.write(string)#io.write("\000\005{EOF}")
-            io.flush()
-
-=begin
-            quer=quer+"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n"
-            quer=quer+"<field>\n"
-            quer=quer+"<item x=\"5\" y=\"3\" type=\"2\" size=\"0\" />\n"
-            quer=quer+"<item x=\"3\" y=\"1\" type=\"0\" size=\"2\" />\n"
-            quer=quer+"<item x=\"3\" y=\"3\" type=\"0\" size=\"2\" />\n"
-            quer=quer+"<item x=\"3\" y=\"4\" type=\"0\" size=\"2\" />\n"
-            quer=quer+"<item x=\"5\" y=\"3\" type=\"2\" size=\"2\" />\n"
-            quer=quer+"<item x=\"5\" y=\"4\" type=\"2\" size=\"2\" />\n"
-            quer=quer+"<item x=\"6\" y=\"9\" type=\"2\" size=\"2\" />\n"
-            quer=quer+("</field>\n")
-=end
-
+    quer=doc.to_s.gsub(">",">\n")+"\0"
+    string.push_string(quer)
+    string.push_string("{EOP}\0")
+    io.write(string)#io.write("\000\005{EOF}")
+    io.flush()
   end
   def eop(*args)
     #puts "ARGS: "+args.inspect
@@ -151,7 +153,8 @@ class FarmServer < GServer
     if @buffer[args[0]][{:x=>hash["x"], :y=>hash["y"]}].nil?
        @buffer[args[0]][{:x=>hash["x"], :y=>hash["y"]}]={:size=>0,:type=>hash["type"]}
     end
-   puts "buffer, handling "+ @buffer[args[0]].inspect
+    puts "buffer, handling "+ @buffer[args[0]].inspect
+   puts "buffer, handling "+ @buffer[args[0]].length.to_s
   end
   def addvegy_handler(*args)
 
@@ -179,15 +182,31 @@ class FarmServer < GServer
     push_field(args[0]) 
   end
   def dbtobuffer(io)
-    
+    @buffer[io]=Hash::new
     User.where(:username=>"guest").first.fields.each do |f|
-      @buffer[io][{:x=>f.x,:y=>f.y}]={:stage=>f.stage,:type=>(f.plant_id-1)}
+      @buffer[io][{:x=>f.x,:y=>f.y}]={:size=>f.stage,:type=>(f.plant_id-1)}
     end  
+  end
+  def buffertodb(io)
+    @buffer[io].each_pair do |xy,stagetype|
+      field=User.where(:username=>"guest").first.fields
+      if field.where(xy).first.nil?
+        field.create(xy.merge({:stage=>stagetype[:size],:plant_id=>(stagetype[:type]+1)}))    
+      else
+        field.where(xy).first.update_attributes(:stage=>stagetype[:size],:plant_id=>(stagetype[:type]+1))
+      end
+    end
+    User.where(:username=>"guest").first.fields.each do |f|
+      if @buffer[io][{:x=>f.x,:y=>f.y}].nil?
+        f.delete
+      end
+    end
+   
   end
   def connection_handler(*args)
     @users[args[0]]=args[1]["user_alias"]  
     @buffer[args[0]]=Hash::new
-    dbtobuffer(args[0])
+    dbtobuffer(args[0]) if @buffered 
     push_field(args[0])       
   end
   def harvesting_handler(*args)
@@ -196,22 +215,32 @@ class FarmServer < GServer
     hash["y"]=hash["y"].to_i
     if !@buffer[args[0]][{:x=>hash["x"], :y=>hash["y"]}].nil?
       if @buffer[args[0]][{:x=>hash["x"], :y=>hash["y"]}][:size]>=4
-        @buffer[args[0]].delete[{:x=>hash["x"], :y=>hash["y"]}]
+        @buffer[args[0]].delete({:x=>hash["x"], :y=>hash["y"]})
       end
     end
     puts hash.inspect
      puts "buffer, handling "+ @buffer[args[0]].inspect
   end  
+
+
   def newday_handler(*args)
     #puts "newday_handler"
-    User.where(:username=>"guest").first.fields.find(:all).each do |rec|
-      if rec.stage.nil?
-        rec.delete
-      else      
-        rec.stage+=1 if rec.stage<5
-        rec.save
+    if @buffered
+      @buffer[args[0]].each_value do |v|
+        if v[:size]<4
+          v[:size]+=1
+        end
       end
-    end  
+    else    
+      User.where(:username=>"guest").first.fields.find(:all).each do |rec|
+        if rec.stage.nil?
+          rec.delete
+        else      
+          rec.stage+=1 if rec.stage<5
+          rec.save
+        end
+      end  
+    end
   end
   def dispatchqueue(io)
     #puts "caller1="+@caller.inspect
