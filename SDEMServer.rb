@@ -43,12 +43,6 @@ module FarmServerModule
   
 
   def connection_handler(*args) #Обработчик команды соединения с сервером
-    #@users.each_pair do |io,user|
-    #  if user==args[1]["user_alias"] and !io.closed?
-    #    io.close
-    #  end
-    #end
-     
     @users=args[0]["user_alias"]  
     if User.where(:username=>@users).nil?
       User.create(:username=>@users)
@@ -59,14 +53,13 @@ module FarmServerModule
     @timer = EventMachine::PeriodicTimer.new(@period) do
       periodic_handler()
     end
-    @timer = EventMachine::PeriodicTimer.new(@period*5) do
+    @timer1 = EventMachine::PeriodicTimer.new(@period*5) do
       buffertodb()
     end
   end
   def periodic_handler() #Периодический прирост растений
     newday_handler()
     push_field()   
-    #buffertodb() 
   end
   def crop_handler(*args) #Обработка команды посадки растения
     hash=args[0]
@@ -76,7 +69,6 @@ module FarmServerModule
     if @buffer[{:x=>hash["x"], :y=>hash["y"]}].nil?
        @buffer[{:x=>hash["x"], :y=>hash["y"]}]={:size=>0,:type=>hash["type"]}
     end
-    #buffertodb()
   end
 
   def push_field() #Функция пересылки данных о поле клиенту 
@@ -145,7 +137,6 @@ module FarmServerModule
         @buffer.delete({:x=>hash["x"], :y=>hash["y"]})
       end
     end
-    #buffertodb()
   end  
 
 
@@ -193,13 +184,11 @@ class FarmServer < EventMachine::Connection
     @users=""
     @policy_checker=false
     @timer=nil
+    @timer1=nil
     @period=10
 	end
-  
-  
 
-	def receive_data data
-    
+	def receive_data data  
     if data =~ /policy-file-request/
       @policy_checker=true
       send_data @@xmldata+"\0"
