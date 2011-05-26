@@ -1,0 +1,5 @@
+SDServer.rb - Сервер на основе gserver
+SDEMServer.rb - EventMachine сервер
+farm.sqlite3 - База данных игрового поля
+AR.rb - инициализатор БД
+Main.swf - клиент
