@@ -56,10 +56,9 @@ module FarmServerModule
     operation_block = Proc.new {
       begin
         bufertodb()
-      rescue
-        nil   
+      rescue 
+        nil
       end
-
     }
     callback_block = Proc.new {
       nil             
@@ -210,7 +209,7 @@ class FarmServer < EventMachine::Connection
 	end
 
 	def unbind
-    buffertodb() if !@policy_checker
+    EventMachine::defer(buffertodb()) if !@policy_checker
 	end
 end
 
