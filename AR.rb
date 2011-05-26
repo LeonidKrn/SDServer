@@ -46,12 +46,11 @@ user=User.create(:username=>"guest")
 plnts << (plant1=Plant.create(:plant_name=>"plant1"))
 plnts << (plant2=Plant.create(:plant_name=>"plant2"))
 plnts << (plant3=Plant.create(:plant_name=>"plant3"))
-plnts << (plant4=Plant.create(:plant_name=>"plant4"))
-plnts << (plant5=Plant.create(:plant_name=>"plant5"))
+
 for x in 0..12 do
   for y in 0..12 do
     if rand(13*13/5)==1
-      user.fields.create(:x=>x,:y=>y,:plant_id=>plnts[rand(3)].id, :stage=>(rand(5)))
+      user.fields.create(:x=>x,:y=>y,:plant_id=>plnts[rand(plnts.length)].id, :stage=>(rand(5)))
     end
   end 
 end
