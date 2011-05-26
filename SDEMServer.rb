@@ -53,8 +53,19 @@ module FarmServerModule
     @timer = EventMachine::PeriodicTimer.new(@period) do
       periodic_handler()
     end
-    @timer1 = EventMachine::PeriodicTimer.new(@period*5) do
-      buffertodb()
+    operation_block = Proc.new {
+      begin
+        bufertodb()
+      rescue
+        nil   
+      end
+
+    }
+    callback_block = Proc.new {
+      nil             
+    }
+    @timer1 = EventMachine::PeriodicTimer.new(@period*5+1) do
+      EventMachine::defer(operation_block,callback_block) 
     end
   end
   def periodic_handler() #Периодический прирост растений
