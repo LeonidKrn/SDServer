@@ -2,7 +2,7 @@ require 'gserver'
 require 'active_record'
 require 'rexml/document'
 
-ActiveRecord::Base.establish_connection(:adapter=>"sqlite3",:database=>"farm.sqlite3",:host=>"localhost",:username=>"leonid")
+ActiveRecord::Base.establish_connection(:adapter=>"sqlite3",:database=>"farm.sqlite3",:host=>"localhost")
 
 class Field < ActiveRecord::Base
   belongs_to :user

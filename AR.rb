@@ -1,7 +1,7 @@
 require 'active_record'
 
 
-ActiveRecord::Base.establish_connection(:adapter=>"sqlite3",:database=>"farm.sqlite3",:host=>"localhost",:username=>"leonid")
+ActiveRecord::Base.establish_connection(:adapter=>"sqlite3",:database=>"farm.sqlite3",:host=>"localhost")
 begin
   ActiveRecord::Schema.drop_table(:fields)
   ActiveRecord::Schema.drop_table(:plants)
